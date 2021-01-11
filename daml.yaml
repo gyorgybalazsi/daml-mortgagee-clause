@@ -1,0 +1,17 @@
+sdk-version: 1.8.0
+name: daml-mortgagee-clause
+source: daml
+init-script: Main:setup
+parties:
+  - Operator
+  - InsuranceCompany
+  - Bank
+  - HomeOwner
+  - Auditor
+version: 0.0.1
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script
+sandbox-options:
+  - --wall-clock-time

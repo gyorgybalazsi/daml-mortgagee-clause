@@ -1,0 +1,273 @@
+module Main where
+
+import Daml.Script
+
+type PropertyDetails = Text 
+type MortgageId = Text
+type InsurancePolicyId = Text 
+
+--  ROLE CONTRACTS
+
+template InsurerRoleContractProposal 
+  with 
+    operator : Party 
+    insurer : Party 
+    auditor : Party 
+  where 
+    signatory operator 
+    controller insurer can 
+      InsurerRoleContractProposal_Accept : ContractId InsurerRoleContract 
+       do 
+        create InsurerRoleContract with 
+          operator 
+          insurer 
+          auditor
+
+template InsurerRoleContract
+  with 
+    operator : Party 
+    insurer : Party 
+    auditor : Party 
+  where 
+    signatory operator, insurer 
+    observer auditor 
+    controller insurer can 
+      nonconsuming CreateInsurancePolicyProposal : ContractId InsurancePolicyProposal 
+        with 
+          mortgagor : Party 
+          property : PropertyDetails
+          insurancePolicyId : InsurancePolicyId
+        do 
+          create  InsurancePolicyProposal with 
+            insurer
+            mortgagor
+            property
+            insurancePolicyId 
+            auditor
+
+template MortgageeRoleContractProposal 
+  with 
+    operator : Party 
+    mortgagee : Party 
+    auditor : Party 
+  where 
+    signatory operator 
+    controller mortgagee can 
+      MortgageeRoleContractProposal_Accept : ContractId MortgageeRoleContract 
+        do 
+          create  
+            MortgageeRoleContract with 
+              operator 
+              mortgagee 
+              auditor 
+
+template MortgageeRoleContract 
+  with 
+    operator : Party 
+    mortgagee : Party 
+    auditor : Party 
+  where 
+    signatory operator, mortgagee 
+    observer auditor 
+    controller mortgagee can 
+      nonconsuming MortgageeRoleContract_CreateMortgageeClauseClaim : ContractId MortgageeClauseClaim 
+        with 
+          insurer : Party 
+          mortgagor : Party 
+          property : PropertyDetails
+          mortgageId : MortgageId 
+        do 
+          create MortgageeClauseClaim with 
+            insurer
+            mortgagor 
+            property 
+            mortgagee 
+            mortgageId 
+            auditor 
+
+-- INSURANCE POLICY
+
+template InsurancePolicyProposal 
+  with 
+    insurer : Party 
+    mortgagor : Party 
+    property : PropertyDetails 
+    insurancePolicyId : InsurancePolicyId
+    auditor : Party 
+  where 
+    signatory insurer 
+    controller mortgagor can 
+      InsurancePolicyProposal_Accept : ContractId InsurancePolicy 
+        do 
+          create InsurancePolicy with 
+            insurer
+            mortgagor
+            property 
+            insurancePolicyId
+            auditor
+            observers = []
+
+template InsurancePolicy 
+  with 
+    insurancePolicyId : InsurancePolicyId
+    insurer : Party 
+    mortgagor : Party 
+    property : PropertyDetails 
+    auditor : Party 
+    observers : [Party]
+  where 
+    signatory insurer, mortgagor 
+    observer observers
+    controller insurer can 
+      MakeObserver : ContractId InsurancePolicy
+        with 
+          newObserver : Party 
+        do 
+          create this with 
+            insurer
+            mortgagor
+            property 
+            observers = newObserver :: observers 
+    nonconsuming choice 
+      InsurancePolicy_CreateMortgageeClauseClaim : ContractId MortgageeClauseClaim
+        with 
+            mortgagee : Party
+            mortgageId : MortgageId
+          controller mortgagee 
+        do 
+          assertMsg "Mortgagee must be an observer" (elem mortgagee observers)
+          create MortgageeClauseClaim with 
+              insurer 
+              mortgagor
+              property 
+              mortgagee 
+              mortgageId 
+              auditor 
+
+-- MORTGAGEE CLAIM
+
+template MortgageeClauseClaim 
+  with 
+    insurer : Party 
+    mortgagor : Party 
+    property : PropertyDetails
+    mortgagee : Party 
+    mortgageId : MortgageId 
+    auditor : Party 
+  where 
+    signatory mortgagee, mortgagor
+    observer mortgagor 
+    controller insurer can 
+      MortgageeClauseClaim_Grant : (ContractId MortgageeClause, ContractId AnonymizedCopy)
+        with 
+          insurancePolicyId : InsurancePolicyId
+        do 
+          mortgageeClauseId <- create MortgageeClause with 
+                                        insurer
+                                        mortgagor
+                                        property
+                                        mortgagee 
+                                        mortgageId
+                                        insurancePolicyId
+          anonymyzedCopyId <- create AnonymizedCopy with 
+                                        insurer
+                                        mortgagee 
+                                        property
+                                        auditor 
+          pure (mortgageeClauseId, anonymyzedCopyId)
+
+
+template MortgageeClause 
+  with 
+    insurer : Party 
+    insurancePolicyId : InsurancePolicyId
+    mortgagor : Party 
+    property : PropertyDetails
+    mortgagee : Party 
+    mortgageId : MortgageId 
+  where 
+    signatory insurer, mortgagor, mortgagee 
+
+
+template AnonymizedCopy 
+  with 
+    insurer : Party 
+    mortgagee : Party 
+    property : PropertyDetails
+    auditor : Party 
+  where 
+    signatory insurer, mortgagee 
+    observer auditor
+
+-- SETUP SCRIPT
+
+
+--setup : Script (ContractId MortgageeClause, ContractId AnonymizedCopy)
+setup = script do 
+  operator <- allocatePartyWithHint "Operator" (PartyIdHint "Operator")
+  insuranceCompany <- allocatePartyWithHint "InsuranceCompany" (PartyIdHint "InsuranceCompany")
+  bank <- allocatePartyWithHint "Bank" (PartyIdHint "Bank")
+  homeOwner <- allocatePartyWithHint "HomeOwner" (PartyIdHint "HomeOwner") 
+  auditor <- allocatePartyWithHint "Auditor" (PartyIdHint "Auditor") 
+
+  let propertyDetails = "property details" 
+  let mortgageId = "abcd"
+  let insuranceId = "1234"
+
+--  ROLE CONTRACTS
+
+  insurerRoleContractProposal <- submit operator do 
+    createCmd InsurerRoleContractProposal with 
+      operator 
+      insurer = insuranceCompany 
+      auditor 
+
+  insurerRoleContract <- submit insuranceCompany do 
+    exerciseCmd insurerRoleContractProposal InsurerRoleContractProposal_Accept 
+
+
+  mortgageeRoleContractProposal <- submit operator do 
+    createCmd MortgageeRoleContractProposal with 
+      operator 
+      mortgagee = bank 
+      auditor 
+
+  mortgageeRoleContract <- submit bank do 
+    exerciseCmd mortgageeRoleContractProposal MortgageeRoleContractProposal_Accept 
+
+-- INSURANCE POLICY
+
+  insuranceProposal <- submit insuranceCompany do 
+    createCmd InsurancePolicyProposal with 
+      insurer = insuranceCompany
+      mortgagor = homeOwner 
+      property = propertyDetails
+      insurancePolicyId = insuranceId
+      auditor = auditor 
+
+  insurancePolicy1 <- submit homeOwner do 
+      exerciseCmd insuranceProposal InsurancePolicyProposal_Accept 
+
+  insurancePolicy2 <- submit insuranceCompany do 
+    exerciseCmd insurancePolicy1 MakeObserver with 
+      newObserver = bank 
+
+
+-- MORTGAGEE CLAUSE CLAIM
+
+  mortgageeClauseClaim  <- submit bank do 
+    exerciseCmd insurancePolicy2 InsurancePolicy_CreateMortgageeClauseClaim with 
+      mortgagee = bank 
+      mortgageId = mortgageId
+
+  (mortgageClauseId, anonymyzedCopyId) <- submit insuranceCompany do 
+    exerciseCmd mortgageeClauseClaim MortgageeClauseClaim_Grant with 
+      insurancePolicyId = insuranceId
+
+  pure (mortgageClauseId, anonymyzedCopyId)
+
+
+
+
+
+
